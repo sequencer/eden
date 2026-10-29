@@ -20,6 +20,7 @@
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
 #include "core/crypto/key_manager.h"
+#include "core/file_sys/content_archive.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/hle/service/am/applet_manager.h"
@@ -376,6 +377,23 @@ int main(int argc, char** argv) {
 
     system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
     system.SetFilesystem(std::make_shared<FileSys::RealVfsFilesystem>());
+    // Register the NCAs of the loaded container (NSP/XCI) or NCA, as the Qt frontend does: the
+    // RomFS of an update is patched onto the base NCA found through the content provider.
+    static FileSys::ManualContentProvider manual_provider;
+    system.RegisterContentProvider(FileSys::ContentProviderUnionSlot::FrontendManual,
+                                   &manual_provider);
+    if (const auto file = system.GetFilesystem()->OpenFile(filepath, FileSys::OpenMode::Read);
+        file && !manual_provider.AddEntriesFromContainer(file)) {
+        if (const auto loader = Loader::GetLoader(system, file);
+            loader && loader->GetFileType() == Loader::FileType::NCA) {
+            u64 program_id = 0;
+            if (loader->ReadProgramId(program_id) == Loader::ResultStatus::Success) {
+                manual_provider.AddEntry(FileSys::TitleType::Application,
+                                         FileSys::GetCRTypeFromNCAType(FileSys::NCA{file}.GetType()),
+                                         program_id, file);
+            }
+        }
+    }
     system.GetFileSystemController().CreateFactories(*system.GetFilesystem());
     system.GetUserChannel().clear();
 

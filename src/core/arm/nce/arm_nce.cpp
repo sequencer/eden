@@ -161,10 +161,17 @@ bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, voi
     auto* info = static_cast<siginfo_t*>(raw_info);
 
     // Try to handle an invalid access.
-    // TODO: handle accesses which split a page?
-    const Common::ProcessAddress addr =
-        (reinterpret_cast<u64>(info->si_addr) & ~Memory::YUZU_PAGEMASK);
+    // Apple cores report the first byte of an access that splits a page, not the
+    // faulting page: also invalidate the next page when an access of up to 64 bytes
+    // from the fault address reaches it.
+    const u64 fault = reinterpret_cast<u64>(info->si_addr);
+    const Common::ProcessAddress addr = fault & ~Memory::YUZU_PAGEMASK;
     auto& memory = guest_ctx->parent->m_running_thread->GetOwnerProcess()->GetMemory();
+    const Common::ProcessAddress next = addr + Memory::YUZU_PAGESIZE;
+    if ((fault & Memory::YUZU_PAGEMASK) > Memory::YUZU_PAGESIZE - 64 &&
+        memory.IsValidVirtualAddress(next)) {
+        memory.InvalidateNCE(next, Memory::YUZU_PAGESIZE);
+    }
     if (memory.InvalidateNCE(addr, Memory::YUZU_PAGESIZE)) {
         // We handled the access successfully and are returning to guest code.
         return true;
